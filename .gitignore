@@ -1,0 +1,28 @@
+# IDE
+.vscode/
+
+# 이미지 파일 (원본 입력 이미지)
+image/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.mp4
+*.webm
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 가상환경
+env/
+venv/
+.env/
+
+# 결과물
+*.txt
+ascii.html
+
+# 임시 파일
+*.tmp
