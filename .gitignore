@@ -22,6 +22,7 @@ venv/
 
 # 결과물
 *.txt
+!requirements.txt
 ascii.html
 
 # 임시 파일

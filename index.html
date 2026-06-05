@@ -80,6 +80,7 @@ header h1 { font-size: 1rem; color: #fff; white-space: nowrap; }
   height: 22px;
 }
 
+/* 프레임 추출용 오프스크린 캔버스 */
 canvas, video, img { display: none; }
 </style>
 </head>
@@ -101,8 +102,8 @@ canvas, video, img { display: none; }
       <span class="ctrl-val" id="v-ratio">0.45</span>
     </div>
     <div class="ctrl">
-      엣지 <input type="range" id="c-edge" min="0" max="150" value="40">
-      <span class="ctrl-val" id="v-edge">40</span>
+      엣지 <input type="range" id="c-edge" min="0" max="150" value="50">
+      <span class="ctrl-val" id="v-edge">50</span>
     </div>
     <div class="ctrl">
       크기 <input type="range" id="c-size" min="4" max="20" value="10">
@@ -125,17 +126,14 @@ canvas, video, img { display: none; }
   <div id="output">파일을 업로드하면 여기에 ASCII 아트가 표시됩니다.</div>
 </div>
 
-<div id="status">대기 중</div>
+<div id="status">대기 중 — python server.py 실행 필요</div>
 
+<!-- 영상/GIF 프레임 추출용 (화면에 표시 안 됨) -->
 <canvas id="canvas"></canvas>
 <video  id="vid" muted playsinline loop></video>
 <img    id="img-el">
 
 <script>
-// ── 밝기 순서로 정렬된 ASCII 문자셋 (짙음 → 옅음) ──
-const ASCII = '$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,"^`\'. ';
-
-// 픽셀 데이터 추출용 오프스크린 캔버스 (화면에 표시 안 됨)
 const canvas  = document.getElementById('canvas');
 const ctx     = canvas.getContext('2d', { willReadFrequently: true });
 const vidEl   = document.getElementById('vid');
@@ -143,10 +141,44 @@ const imgEl   = document.getElementById('img-el');
 const output  = document.getElementById('output');
 const statusEl= document.getElementById('status');
 
-let mode = null; // 'image' | 'gif' | 'video'
-let raf  = null; // requestAnimationFrame ID (GIF·영상 루프용)
+let mode    = null;  // 'image' | 'gif' | 'video'
+let raf     = null;  // requestAnimationFrame ID
+let sending = false; // 서버 요청 중복 방지 플래그
 
-// ── 드롭존: 파일 업로드 이벤트 처리 ──────────────────
+// ── 슬라이더·체크박스 값 읽기 ───────────────────────
+function p() {
+  return {
+    width:      +document.getElementById('c-width').value,
+    contrast:   +document.getElementById('c-contrast').value,
+    ratio:      +document.getElementById('c-ratio').value,
+    canny_low:  +document.getElementById('c-edge').value,
+    canny_high: +document.getElementById('c-edge').value * 3,
+    invert:      document.getElementById('c-invert').checked,
+    color:       document.getElementById('c-color').checked,
+  };
+}
+
+// 슬라이더 값 변경 시 표시값 갱신 + 정적 이미지 즉시 재요청
+[['width','c-width'],['contrast','c-contrast'],['ratio','c-ratio'],['edge','c-edge']].forEach(([id, ctrl]) => {
+  document.getElementById(ctrl).addEventListener('input', function() {
+    document.getElementById('v-' + id).textContent = this.value;
+    if (mode === 'image') sendFrame();
+  });
+});
+
+// 크기 슬라이더: CSS만 변경, 서버 요청 불필요
+document.getElementById('c-size').addEventListener('input', function() {
+  const sz = this.value;
+  document.getElementById('v-size').textContent = sz;
+  output.style.fontSize   = sz + 'px';
+  output.style.lineHeight = (sz * 1.15) + 'px';
+});
+
+['c-invert','c-color'].forEach(id => {
+  document.getElementById(id).addEventListener('change', () => { if (mode === 'image') sendFrame(); });
+});
+
+// ── 드롭존 ──────────────────────────────────────────
 const drop = document.getElementById('drop-zone');
 const fi   = document.getElementById('file-input');
 
@@ -158,159 +190,111 @@ fi.addEventListener('change', () => loadFile(fi.files[0]));
 
 function loadFile(file) {
   if (!file) return;
-  if (raf) { cancelAnimationFrame(raf); raf = null; } // 이전 루프 중단
+  if (raf) { cancelAnimationFrame(raf); raf = null; }
   const url = URL.createObjectURL(file);
 
   if (file.type.startsWith('video/')) {
-    // MP4·WEBM 등 영상: video 태그로 재생하며 매 프레임 렌더링
     mode = 'video';
     vidEl.src = url;
     vidEl.play();
     vidEl.addEventListener('loadeddata', startLoop, { once: true });
     statusEl.textContent = '영상: ' + file.name;
   } else if (file.type === 'image/gif') {
-    // GIF: img 태그가 자동 재생하는 현재 프레임을 매 틱마다 캔버스에 그림
+    // GIF: img 태그가 애니메이션 재생 → 매 틱마다 현재 프레임을 캔버스에 그려 서버로 전송
     mode = 'gif';
     imgEl.onload = startLoop;
     imgEl.src = url;
     statusEl.textContent = 'GIF: ' + file.name;
   } else {
-    // 정적 이미지: 한 번만 렌더링
     mode = 'image';
-    imgEl.onload = () => { render(); statusEl.textContent = '이미지: ' + file.name; };
+    imgEl.onload = () => sendFrame();
     imgEl.src = url;
+    statusEl.textContent = '이미지: ' + file.name;
   }
 }
 
-// GIF·영상은 매 프레임마다 render() 호출
+// GIF·영상은 매 프레임마다 서버로 전송
 function startLoop() {
-  function loop() { render(); raf = requestAnimationFrame(loop); }
+  function loop() {
+    sendFrame();
+    raf = requestAnimationFrame(loop);
+  }
   loop();
 }
 
-// ── 슬라이더·체크박스 값 읽기 ───────────────────────
-function p() {
-  return {
-    width:    +document.getElementById('c-width').value,    // ASCII 출력 열 수
-    contrast: +document.getElementById('c-contrast').value, // 대비 배율
-    ratio:    +document.getElementById('c-ratio').value,    // 폰트 세로/가로 비율 보정
-    edge:     +document.getElementById('c-edge').value,     // Sobel 엣지 감지 임계값
-    invert:    document.getElementById('c-invert').checked, // 밝기 반전 (어두운 배경용)
-    color:     document.getElementById('c-color').checked,  // 원본 색상 유지 여부
-  };
-}
-
-// 슬라이더 값 변경 시 표시값 갱신 + 정적 이미지는 즉시 재렌더링
-[['width','c-width'],['contrast','c-contrast'],['ratio','c-ratio'],['edge','c-edge']].forEach(([id, ctrl]) => {
-  document.getElementById(ctrl).addEventListener('input', function() {
-    document.getElementById('v-' + id).textContent = this.value;
-    if (mode === 'image') render();
-  });
-});
-
-// 크기 슬라이더: CSS font-size만 바꾸고 문자 격자는 유지 → 비율 보존
-document.getElementById('c-size').addEventListener('input', function() {
-  const sz = this.value;
-  document.getElementById('v-size').textContent = sz;
-  output.style.fontSize   = sz + 'px';
-  output.style.lineHeight = (sz * 1.15) + 'px'; // 고정 비율로 줄 간격 연동
-});
-
-['c-invert','c-color'].forEach(id => {
-  document.getElementById(id).addEventListener('change', () => { if (mode === 'image') render(); });
-});
-
-// ── 핵심 렌더링: 이미지/프레임 → ASCII 변환 ─────────
-function render() {
+// ── 핵심: 현재 프레임을 캔버스에서 추출 → 서버로 전송 → ASCII 수신 ──
+async function sendFrame() {
+  if (sending) return; // 이전 요청이 처리 중이면 건너뜀
   const src  = (mode === 'video') ? vidEl : imgEl;
   const srcW = src.videoWidth  || src.naturalWidth;
   const srcH = src.videoHeight || src.naturalHeight;
   if (!srcW || !srcH) return;
 
-  const { width, contrast, ratio, invert, color, edge } = p();
-  // 폰트 비율(ratio)로 높이 보정: 문자 셀은 정사각형이 아니므로 세로를 줄임
-  const height = Math.max(1, Math.round(width * (srcH / srcW) * ratio));
+  const params   = p();
+  const width    = params.width;
+  const height   = Math.max(1, Math.round(width * (srcH / srcW) * params.ratio));
 
-  // 오프스크린 캔버스에 리사이즈하여 픽셀 데이터 추출
-  canvas.width = width; canvas.height = height;
-  ctx.drawImage(src, 0, 0, width, height);
-  const data  = ctx.getImageData(0, 0, width, height).data; // RGBA 1차원 배열
-  const n     = width * height;
-  const gray  = new Float32Array(n);
-  const rgbBuf = color ? new Uint8Array(n * 3) : null;
+  // 오프스크린 캔버스에 현재 프레임 그리기
+  canvas.width  = srcW;
+  canvas.height = srcH;
+  ctx.drawImage(src, 0, 0);
 
-  // ① 그레이스케일 변환 + 대비 조정 + 반전
-  for (let i = 0; i < n; i++) {
-    const R = data[i*4], G = data[i*4+1], B = data[i*4+2];
-    if (rgbBuf) { rgbBuf[i*3]=R; rgbBuf[i*3+1]=G; rgbBuf[i*3+2]=B; }
-    // 인간 시각 가중치(BT.601)로 그레이스케일 변환
-    let v = 0.299*R + 0.587*G + 0.114*B;
-    // 대비 강화: 0.5 기준으로 contrast 배율 적용
-    v = (v/255 - 0.5) * contrast * 255 + 128;
-    if (invert) v = 255 - v;
-    gray[i] = Math.max(0, Math.min(255, v));
-  }
+  sending = true;
+  try {
+    // 캔버스를 JPEG blob으로 변환 후 FormData에 담아 서버 전송
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.85));
+    const form = new FormData();
+    form.append('file',       blob, 'frame.jpg');
+    form.append('width',      width);
+    form.append('contrast',   params.contrast);
+    form.append('ratio',      params.ratio);
+    form.append('invert',     params.invert);
+    form.append('canny_low',  params.canny_low);
+    form.append('canny_high', params.canny_high);
+    form.append('color',      params.color);
 
-  // ② Sobel 엣지 감지: 3×3 커널로 수평·수직 그라디언트 계산
-  const edgeMask = new Uint8Array(n);  // 1 = 엣지 픽셀
-  const angleArr = new Float32Array(n); // 엣지 방향(0~180°)
+    const res  = await fetch('/api/convert', { method: 'POST', body: form });
+    const data = await res.json();
 
-  for (let y = 1; y < height-1; y++) {
-    for (let x = 1; x < width-1; x++) {
-      const tl=gray[(y-1)*width+(x-1)], tc=gray[(y-1)*width+x], tr=gray[(y-1)*width+(x+1)];
-      const ml=gray[y*width+(x-1)],                               mr=gray[y*width+(x+1)];
-      const bl=gray[(y+1)*width+(x-1)], bc=gray[(y+1)*width+x],  br=gray[(y+1)*width+(x+1)];
-      const gx = -tl + tr - 2*ml + 2*mr - bl + br; // 수평 그라디언트
-      const gy = -tl - 2*tc - tr + bl + 2*bc + br; // 수직 그라디언트
-      const mag = Math.sqrt(gx*gx + gy*gy);
-      const idx = y*width + x;
-      // 중간 밝기 픽셀에만 엣지 적용 (완전 어둡거나 밝은 영역은 밝기 표현 유지)
-      if (mag > edge && gray[idx] > 50 && gray[idx] < 210) {
-        edgeMask[idx] = 1;
-        angleArr[idx] = (Math.atan2(gy, gx) * 180/Math.PI % 180 + 180) % 180;
-      }
+    if (data.error) {
+      statusEl.textContent = '오류: ' + data.error;
+      return;
     }
+    displayAscii(data);
+    if (mode === 'image') statusEl.textContent = '변환 완료';
+
+  } catch (e) {
+    statusEl.textContent = '서버 연결 실패 — python server.py 실행 확인';
+  } finally {
+    sending = false;
+  }
+}
+
+// ── ASCII 결과 화면 출력 ─────────────────────────────
+function displayAscii(data) {
+  const { lines, colors } = data;
+
+  if (!colors) {
+    // 일반 모드: 순수 텍스트
+    output.textContent = lines.join('\n');
+    return;
   }
 
-  // ③ 엣지 방향 → 선 문자 매핑
-  function angleChar(a) {
-    if (a < 22.5 || a >= 157.5) return '-'; // 수평
-    if (a < 67.5)  return '/';              // 우상향 대각
-    if (a < 112.5) return '|';              // 수직
-    return '\\';                            // 좌상향 대각
-  }
-
-  // ④ ASCII 그리드 생성 및 출력
-  if (color) {
-    // 컬러 모드: 각 문자에 원본 RGB 색상을 <span> 인라인 스타일로 적용
-    const rows = [];
-    for (let y = 0; y < height; y++) {
-      const parts = [];
-      for (let x = 0; x < width; x++) {
-        const idx = y*width + x;
-        const ch  = edgeMask[idx] ? angleChar(angleArr[idx])
-                                   : ASCII[Math.floor(gray[idx]/255*(ASCII.length-1))];
-        const r = rgbBuf[idx*3], g = rgbBuf[idx*3+1], b = rgbBuf[idx*3+2];
-        const safe = ch==='<'?'&lt;': ch==='>'?'&gt;': ch==='&'?'&amp;': ch===' '?'&nbsp;': ch;
-        parts.push(`<span style="color:rgb(${r},${g},${b})">${safe}</span>`);
-      }
-      rows.push(parts.join(''));
+  // 컬러 모드: base64 RGB 데이터를 디코딩해 <span> 태그로 출력
+  const bytes = Uint8Array.from(atob(colors), c => c.charCodeAt(0));
+  const rows  = [];
+  let pi = 0;
+  for (const line of lines) {
+    const parts = [];
+    for (const ch of line) {
+      const r = bytes[pi], g = bytes[pi+1], b = bytes[pi+2];
+      pi += 3;
+      const safe = ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : ch === '&' ? '&amp;' : ch === ' ' ? '&nbsp;' : ch;
+      parts.push(`<span style="color:rgb(${r},${g},${b})">${safe}</span>`);
     }
-    output.innerHTML = rows.join('\n');
-  } else {
-    // 일반 모드: textContent로 고속 출력
-    const rows = [];
-    for (let y = 0; y < height; y++) {
-      let row = '';
-      for (let x = 0; x < width; x++) {
-        const idx = y*width + x;
-        row += edgeMask[idx] ? angleChar(angleArr[idx])
-                              : ASCII[Math.floor(gray[idx]/255*(ASCII.length-1))];
-      }
-      rows.push(row);
-    }
-    output.textContent = rows.join('\n');
+    rows.push(parts.join(''));
   }
+  output.innerHTML = rows.join('\n');
 }
 
 // ── 파일 저장 ────────────────────────────────────────
@@ -321,7 +305,6 @@ function downloadTxt() {
 }
 
 function downloadHtml() {
-  // 컬러 모드일 경우 <span> 태그 포함, 아니면 순수 텍스트
   const inner = output.innerHTML || '';
   if (!inner.trim()) return;
   const html =
