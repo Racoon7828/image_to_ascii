@@ -8,7 +8,6 @@
 
 ```
 ascii.py          Python CLI - 터미널에 ASCII 아트 출력
-gradio_app.py     Gradio GUI - 브라우저 기반 단독 실행
 web/
   server.py       Flask 백엔드 - 브라우저 GUI용 API 서버
   index.html      브라우저 GUI - 드래그앤드롭, 실시간 미리보기
@@ -48,28 +47,6 @@ GIF·영상 실시간 변환을 지원하며, 변환은 모두 `ascii.py` 로직
 | 반전 | 밝기 반전 |
 | 컬러 | 원본 이미지 색상 유지 |
 | TXT / HTML | 결과물 파일 저장 |
-
----
-
-### Gradio GUI (`gradio_app.py`)
-
-```bash
-python gradio_app.py
-```
-
-브라우저에서 `http://localhost:7860` 자동으로 열립니다.  
-서버 없이 단독 실행 가능하며, 슬라이더 조절 시 자동으로 재변환됩니다.
-
-**지원 파일:** JPG · PNG
-
-| 컨트롤 | 설명 |
-|--------|------|
-| 너비 | ASCII 문자 열 수 (40~300) |
-| 대비 | 명암 강도 (0.5~5.0) |
-| 폰트 비율 | 문자 셀 세로/가로 비율 보정 (0.3~0.7) |
-| 엣지 민감도 | Canny 엣지 감지 임계값 (0~150) |
-| 반전 | 밝기 반전 (어두운 배경용) |
-| 컬러 | 원본 이미지 색상 유지 |
 
 ---
 
@@ -131,5 +108,4 @@ python ascii.py anim.gif --fps 15 --loop
 | `numpy` | 픽셀 배열 연산, ASCII 매핑 벡터화 |
 | `opencv-python` | Canny·Sobel 엣지 감지, 영상 처리, 리사이즈 |
 | `Pillow` | 정적 이미지 로드, 대비 조정, 반전 |
-| `gradio` | Gradio GUI |
 | `flask` | 브라우저 GUI용 API 서버 |
