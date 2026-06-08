@@ -1,11 +1,13 @@
 import base64
-import io
+import sys
+import os
 
 import cv2
 import numpy as np
 from flask import Flask, jsonify, request, send_from_directory
-from PIL import Image
 
+# 상위 디렉토리(프로젝트 루트)에서 ascii.py import
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from ascii import ASCII_CHARS, _frame_to_ascii
 
 app = Flask(__name__)
@@ -43,7 +45,7 @@ def process_frame(img_bytes: bytes, width: int, contrast: float, ratio: float,
 
 @app.route('/')
 def index():
-    return send_from_directory('.', 'index.html')
+    return send_from_directory(os.path.dirname(__file__), 'index.html')
 
 
 @app.route('/api/convert', methods=['POST'])
