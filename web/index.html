@@ -71,6 +71,36 @@ header h1 { font-size: 1rem; color: #fff; white-space: nowrap; }
   color: #fff;
 }
 
+#seek-bar {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: #1c1c1c;
+  border-top: 1px solid #2a2a2a;
+}
+#seek-bar input[type=range] {
+  flex: 1;
+  accent-color: #4af;
+  height: 4px;
+  cursor: pointer;
+}
+#seek-time {
+  font-size: 0.75rem;
+  color: #666;
+  white-space: nowrap;
+}
+.vid-btn {
+  background: none;
+  border: none;
+  color: #aaa;
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+.vid-btn:hover { color: #fff; }
+
 #status {
   padding: 4px 16px;
   font-size: 0.75rem;
@@ -113,6 +143,7 @@ canvas, video, img { display: none; }
     <div class="ctrl">컬러 <input type="checkbox" id="c-color"></div>
     <button class="btn btn-ghost" onclick="downloadTxt()">TXT</button>
     <button class="btn btn-ghost" onclick="downloadHtml()">HTML</button>
+    <button class="btn btn-ghost" id="btn-save-video" style="display:none" onclick="saveVideo()">영상 저장</button>
   </div>
 </header>
 
@@ -120,6 +151,13 @@ canvas, video, img { display: none; }
   <p>이미지 / GIF / 영상을 드래그하거나 <span>클릭</span>하여 선택</p>
   <p style="margin-top:6px; font-size:0.75rem">JPG · PNG · GIF · MP4 · WEBM</p>
   <input type="file" id="file-input" accept="image/*,video/*">
+</div>
+
+<div id="seek-bar">
+  <button class="vid-btn" id="btn-playpause" onclick="togglePause()">⏸</button>
+  <button class="vid-btn" id="btn-stop"      onclick="stopVideo()">⏹</button>
+  <input type="range" id="seek" min="0" max="100" value="0" step="0.1">
+  <span id="seek-time">0:00 / 0:00</span>
 </div>
 
 <div id="output-wrap">
@@ -141,9 +179,11 @@ const imgEl   = document.getElementById('img-el');
 const output  = document.getElementById('output');
 const statusEl= document.getElementById('status');
 
-let mode    = null;  // 'image' | 'gif' | 'video'
-let raf     = null;  // requestAnimationFrame ID
-let sending = false; // 서버 요청 중복 방지 플래그
+let mode        = null;   // 'image' | 'gif' | 'video'
+let raf         = null;   // requestAnimationFrame ID
+let sending     = false;  // 서버 요청 중복 방지 플래그
+let paused      = false;  // 일시정지 상태
+let currentFile = null;   // 영상 저장용 원본 파일 참조
 
 // ── 슬라이더·체크박스 값 읽기 ───────────────────────
 function p() {
@@ -191,32 +231,96 @@ fi.addEventListener('change', () => loadFile(fi.files[0]));
 function loadFile(file) {
   if (!file) return;
   if (raf) { cancelAnimationFrame(raf); raf = null; }
+  currentFile = file;
   const url = URL.createObjectURL(file);
+  const btnVideo = document.getElementById('btn-save-video');
 
+  paused = false;
   if (file.type.startsWith('video/')) {
     mode = 'video';
+    _showVideoControls(true);
     vidEl.src = url;
     vidEl.play();
     vidEl.addEventListener('loadeddata', startLoop, { once: true });
     statusEl.textContent = '영상: ' + file.name;
   } else if (file.type === 'image/gif') {
-    // GIF: img 태그가 애니메이션 재생 → 매 틱마다 현재 프레임을 캔버스에 그려 서버로 전송
     mode = 'gif';
+    _showVideoControls(true);
     imgEl.onload = startLoop;
     imgEl.src = url;
     statusEl.textContent = 'GIF: ' + file.name;
   } else {
     mode = 'image';
+    _showVideoControls(false);
     imgEl.onload = () => sendFrame();
     imgEl.src = url;
     statusEl.textContent = '이미지: ' + file.name;
   }
 }
 
+const seekBar  = document.getElementById('seek-bar');
+const seekEl   = document.getElementById('seek');
+const seekTime = document.getElementById('seek-time');
+
+// 시크바 드래그 → 영상 이동
+seekEl.addEventListener('input', () => {
+  if (mode !== 'video') return;
+  vidEl.currentTime = (seekEl.value / 100) * vidEl.duration;
+});
+
+// 영상 재생 중 시크바 자동 업데이트
+vidEl.addEventListener('timeupdate', () => {
+  if (mode !== 'video' || !vidEl.duration) return;
+  seekEl.value = (vidEl.currentTime / vidEl.duration) * 100;
+  seekTime.textContent = _fmt(vidEl.currentTime) + ' / ' + _fmt(vidEl.duration);
+});
+
+function _fmt(sec) {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60).toString().padStart(2, '0');
+  return m + ':' + s;
+}
+
+function _showVideoControls(show) {
+  document.getElementById('btn-save-video').style.display = show ? '' : 'none';
+  const isVideo = show && mode === 'video';
+  seekBar.style.display = isVideo ? 'flex' : 'none';
+  if (!show) return;
+  document.getElementById('btn-playpause').textContent = '⏸';
+}
+
+function togglePause() {
+  const btn = document.getElementById('btn-playpause');
+  paused = !paused;
+  if (paused) {
+    if (raf) { cancelAnimationFrame(raf); raf = null; }
+    if (mode === 'video') vidEl.pause();
+    btn.textContent = '▶';
+    statusEl.textContent = '일시정지';
+  } else {
+    if (mode === 'video') vidEl.play();
+    startLoop();
+    btn.textContent = '⏸';
+    statusEl.textContent = '재생 중';
+  }
+}
+
+function stopVideo() {
+  if (raf) { cancelAnimationFrame(raf); raf = null; }
+  paused = false;
+  vidEl.pause();
+  vidEl.currentTime = 0;
+  output.textContent = '정지됨';
+  statusEl.textContent = '정지';
+  _showVideoControls(false);
+  mode = null;
+  currentFile = null;
+}
+
 // GIF·영상은 매 프레임마다 서버로 전송
 function startLoop() {
   function loop() {
-    sendFrame();
+    if (!paused) sendFrame();
     raf = requestAnimationFrame(loop);
   }
   loop();
@@ -312,6 +416,46 @@ function downloadHtml() {
     'body{background:#000;margin:0}pre{font-family:monospace;font-size:10px;line-height:1.15;color:#fff}' +
     '</style></head><body><pre>' + inner + '</pre></body></html>';
   save('ascii.html', 'text/html', html);
+}
+
+async function saveVideo() {
+  if (!currentFile) return;
+  const params = p();
+  const form = new FormData();
+  form.append('file',       currentFile, currentFile.name);
+  form.append('width',      params.width);
+  form.append('contrast',   params.contrast);
+  form.append('ratio',      params.ratio);
+  form.append('invert',     params.invert);
+  form.append('canny_low',  params.canny_low);
+  form.append('canny_high', params.canny_high);
+  form.append('color',      params.color);
+  form.append('fps',        12);
+
+  const btn = document.getElementById('btn-save-video');
+  btn.textContent = '변환 중…';
+  btn.disabled = true;
+  statusEl.textContent = '영상 변환 중 — 영상 길이에 따라 시간이 걸립니다';
+
+  try {
+    const res = await fetch('/api/convert-video', { method: 'POST', body: form });
+    if (!res.ok) {
+      const err = await res.json();
+      statusEl.textContent = '오류: ' + (err.error || res.status);
+      return;
+    }
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'ascii.mp4';
+    a.click();
+    statusEl.textContent = '영상 저장 완료';
+  } catch (e) {
+    statusEl.textContent = '서버 연결 실패';
+  } finally {
+    btn.textContent = '영상 저장';
+    btn.disabled = false;
+  }
 }
 
 function save(name, mime, content) {

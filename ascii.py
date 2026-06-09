@@ -21,20 +21,30 @@ def _get_width(new_width):
         return 100
 
 
+_CLAHE = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
+
 def _frame_to_ascii(pixels, canny_low, canny_high):
     """그레이스케일 픽셀 배열 → ASCII 문자 격자 반환"""
+    # 감마 보정 — 어두운 영역 선택적 밝힘
+    pixels = ((pixels / 255.0) ** (1 / 1.5) * 255).astype(np.uint8)
+    # 지역 적응형 히스토그램 평활화 — 국소 대비 향상
+    pixels = _CLAHE.apply(pixels)
+
+    # np.clip = 배열의 값 제한
     base_idx = np.clip(
         (pixels / 255 * (len(ASCII_CHARS) - 1)).astype(int),
-        0, len(ASCII_CHARS) - 1
-    )
+        0, len(ASCII_CHARS) - 1)
     ascii_grid = np.array(list(ASCII_CHARS))[base_idx]
 
     # Canny 엣지 감지
     blurred = cv2.GaussianBlur(pixels, (3, 3), 0)
     edges   = cv2.Canny(blurred, canny_low, canny_high)
 
-    Gx = cv2.Sobel(pixels.astype(np.float32), cv2.CV_32F, 1, 0, ksize=3)
-    Gy = cv2.Sobel(pixels.astype(np.float32), cv2.CV_32F, 0, 1, ksize=3)
+    # cv2.sobel = 이미지 엣지의 방향(각도)를 구하는 미분 필터
+    Gx = cv2.Sobel(pixels.astype(np.float32), cv2.CV_32F, 1, 0, ksize=3) # 수직
+    Gy = cv2.Sobel(pixels.astype(np.float32), cv2.CV_32F, 0, 1, ksize=3) # 수평
+    
+    # Gx와 Gy를 합쳐 각도 계산
     angle = np.degrees(np.arctan2(Gy, Gx)) % 180
 
     # 중간 밝기 픽셀의 강한 엣지만 방향 문자로 교체
@@ -44,8 +54,8 @@ def _frame_to_ascii(pixels, canny_low, canny_high):
     char_map = np.where(
         (angle < 22.5) | (angle >= 157.5), '-',
         np.where(angle < 67.5, '/',
-        np.where(angle < 112.5, '|', '\\'))
-    )
+        np.where(angle < 112.5, '|', '\\')))
+    
     ascii_grid[edge_mask] = char_map[edge_mask]
 
     return ascii_grid
@@ -60,18 +70,19 @@ def image_to_ascii(image_path, new_width=None, invert=True, contrast=2.0,
 
     new_width = _get_width(new_width)
 
-    # 흑백 이미지~
+    # 흑백 이미지 ~
     img = Image.open(image_path).convert('L')
     img = ImageEnhance.Contrast(img).enhance(contrast)
     if invert:
         img = ImageOps.invert(img)
 
+    # 이미지 사이즈 조절
     width, height = img.size
     new_height = int(new_width * (height / width) * font_ratio)
     img = img.resize((new_width, new_height), Image.LANCZOS)
     pixels = np.array(img, dtype=np.uint8)
 
-    # 컬러 이미지~
+    # 컬러 이미지 ~
     if color:
         img_rgb = Image.open(image_path).convert('RGB')
         img_rgb = img_rgb.resize((new_width, new_height), Image.LANCZOS)

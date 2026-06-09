@@ -33,7 +33,7 @@ python web/server.py   # http://localhost:5000
 ```
 
 Flask 서버 실행 후 브라우저에서 `http://localhost:5000` 접속.  
-GIF·영상 실시간 변환을 지원하며, 변환은 모두 `ascii.py` 로직이 처리합니다.
+변환은 모두 `ascii.py` 로직이 처리합니다.
 
 **지원 파일:** JPG · PNG · GIF · MP4 · WEBM
 
@@ -46,7 +46,10 @@ GIF·영상 실시간 변환을 지원하며, 변환은 모두 `ascii.py` 로직
 | 크기 | 화면 표시 폰트 크기 (4~20px) |
 | 반전 | 밝기 반전 |
 | 컬러 | 원본 이미지 색상 유지 |
-| TXT / HTML | 결과물 파일 저장 |
+| ⏸ 일시정지 | 영상·GIF ASCII 업데이트 및 재생 일시정지 |
+| ⏹ 정지 | 영상·GIF 완전 정지 |
+| TXT / HTML | 현재 ASCII 결과 파일 저장 |
+| 영상 저장 | 영상·GIF 전체를 ASCII 변환하여 mp4로 저장 |
 
 ---
 
@@ -107,5 +110,7 @@ python ascii.py anim.gif --fps 15 --loop
 |-----------|------|
 | `numpy` | 픽셀 배열 연산, ASCII 매핑 벡터화 |
 | `opencv-python` | Canny·Sobel 엣지 감지, 영상 처리, 리사이즈 |
-| `Pillow` | 정적 이미지 로드, 대비 조정, 반전 |
+| `Pillow` | 이미지 로드, 대비 조정, 반전, 문자 렌더링 |
 | `flask` | 브라우저 GUI용 API 서버 |
+| `imageio` | ASCII 영상 mp4 인코딩 |
+| `imageio-ffmpeg` | H.264 인코더 번들 |
