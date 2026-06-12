@@ -25,18 +25,22 @@ _CLAHE = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
 
 def _frame_to_ascii(pixels, canny_low, canny_high):
     """그레이스케일 픽셀 배열 → ASCII 문자 격자 반환"""
-    # 감마 보정 — 어두운 영역 선택적 밝힘
-    pixels = ((pixels / 255.0) ** (1 / 1.5) * 255).astype(np.uint8)
     # 지역 적응형 히스토그램 평활화 — 국소 대비 향상
     pixels = _CLAHE.apply(pixels)
 
-    # np.clip = 배열의 값 제한
+    # 히스토그램 스트레칭 — 1~99 퍼센타일을 0~255로 확장
+    lo = np.percentile(pixels, 1)
+    hi = np.percentile(pixels, 99)
+    pixels_f = np.clip((pixels.astype(np.float32) - lo) / (hi - lo + 1e-5) * 255, 0, 255)
+
+    # 로그 스케일 매핑 — 어두운 영역에 문자 더 많이 배분
     base_idx = np.clip(
-        (pixels / 255 * (len(ASCII_CHARS) - 1)).astype(int),
+        (np.log1p(pixels_f) / np.log1p(255) * (len(ASCII_CHARS) - 1)).astype(int),
         0, len(ASCII_CHARS) - 1)
     ascii_grid = np.array(list(ASCII_CHARS))[base_idx]
+    pixels = pixels_f.astype(np.uint8)
 
-    # Canny 엣지 감지
+    # 가우시안 블러링(노이즈 제거) => Canny 엣지 감지
     blurred = cv2.GaussianBlur(pixels, (3, 3), 0)
     edges   = cv2.Canny(blurred, canny_low, canny_high)
 

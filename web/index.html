@@ -144,6 +144,9 @@ canvas, video, img { display: none; }
     <button class="btn btn-ghost" onclick="downloadTxt()">TXT</button>
     <button class="btn btn-ghost" onclick="downloadHtml()">HTML</button>
     <button class="btn btn-ghost" id="btn-save-video" style="display:none" onclick="saveVideo()">영상 저장</button>
+    <button class="btn btn-ghost" id="btn-capture" onclick="startCapture()">화면 캡처</button>
+    <button class="btn btn-ghost" id="btn-capture-stop" style="display:none;background:#5a1a1a;color:#f88" onclick="stopCapture()">캡처 중지</button>
+    <button class="btn btn-ghost" id="btn-record" onclick="toggleRecord()">🔴 녹화</button>
   </div>
 </header>
 
@@ -179,11 +182,19 @@ const imgEl   = document.getElementById('img-el');
 const output  = document.getElementById('output');
 const statusEl= document.getElementById('status');
 
-let mode        = null;   // 'image' | 'gif' | 'video'
-let raf         = null;   // requestAnimationFrame ID
-let sending     = false;  // 서버 요청 중복 방지 플래그
-let paused      = false;  // 일시정지 상태
-let currentFile = null;   // 영상 저장용 원본 파일 참조
+let mode          = null;   // 'image' | 'gif' | 'video' | 'capture'
+let raf           = null;   // requestAnimationFrame ID
+let sending       = false;  // 서버 요청 중복 방지 플래그
+let paused        = false;  // 일시정지 상태
+let currentFile   = null;   // 영상 저장용 원본 파일 참조
+let captureStream = null;   // 화면 캡처 스트림
+
+// ── 녹화 ──────────────────────────────────────────────
+let recorder     = null;
+let recChunks    = [];
+let recCanvas    = document.createElement('canvas');
+let recCtx       = recCanvas.getContext('2d');
+let recReady     = false; // 첫 프레임에서 캔버스 크기 초기화 여부
 
 // ── 슬라이더·체크박스 값 읽기 ───────────────────────
 function p() {
@@ -317,6 +328,47 @@ function stopVideo() {
   currentFile = null;
 }
 
+async function startCapture() {
+  try {
+    if (raf) { cancelAnimationFrame(raf); raf = null; }
+
+    captureStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    mode = 'capture';
+    paused = false;
+
+    vidEl.srcObject = captureStream;
+    await vidEl.play();
+
+    // 캡처 종료 시 (사용자가 브라우저 공유 중지 버튼 클릭)
+    captureStream.getVideoTracks()[0].addEventListener('ended', stopCapture);
+
+    document.getElementById('btn-capture').style.display = 'none';
+    document.getElementById('btn-capture-stop').style.display = '';
+    document.getElementById('btn-save-video').style.display = 'none';
+    seekBar.style.display = 'none';  // 라이브 스트림은 시크바 없음
+
+    startLoop();
+    statusEl.textContent = '화면 캡처 중';
+  } catch (e) {
+    statusEl.textContent = '캡처 취소 또는 권한 거부';
+  }
+}
+
+function stopCapture() {
+  if (raf) { cancelAnimationFrame(raf); raf = null; }
+  if (captureStream) {
+    captureStream.getTracks().forEach(t => t.stop());
+    captureStream = null;
+  }
+  vidEl.srcObject = null;
+  mode = null;
+  paused = false;
+  document.getElementById('btn-capture').style.display = '';
+  document.getElementById('btn-capture-stop').style.display = 'none';
+  output.textContent = '캡처 종료';
+  statusEl.textContent = '대기 중';
+}
+
 // GIF·영상은 매 프레임마다 서버로 전송
 function startLoop() {
   function loop() {
@@ -329,7 +381,7 @@ function startLoop() {
 // ── 핵심: 현재 프레임을 캔버스에서 추출 → 서버로 전송 → ASCII 수신 ──
 async function sendFrame() {
   if (sending) return; // 이전 요청이 처리 중이면 건너뜀
-  const src  = (mode === 'video') ? vidEl : imgEl;
+  const src  = (mode === 'video' || mode === 'capture') ? vidEl : imgEl;
   const srcW = src.videoWidth  || src.naturalWidth;
   const srcH = src.videoHeight || src.naturalHeight;
   if (!srcW || !srcH) return;
@@ -377,28 +429,99 @@ async function sendFrame() {
 // ── ASCII 결과 화면 출력 ─────────────────────────────
 function displayAscii(data) {
   const { lines, colors } = data;
+  let bytes = null;
 
   if (!colors) {
-    // 일반 모드: 순수 텍스트
     output.textContent = lines.join('\n');
-    return;
+  } else {
+    bytes = Uint8Array.from(atob(colors), c => c.charCodeAt(0));
+    const rows = [];
+    let pi = 0;
+    for (const line of lines) {
+      const parts = [];
+      for (const ch of line) {
+        const r = bytes[pi], g = bytes[pi+1], b = bytes[pi+2];
+        pi += 3;
+        const safe = ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : ch === '&' ? '&amp;' : ch === ' ' ? '&nbsp;' : ch;
+        parts.push(`<span style="color:rgb(${r},${g},${b})">${safe}</span>`);
+      }
+      rows.push(parts.join(''));
+    }
+    output.innerHTML = rows.join('\n');
   }
 
-  // 컬러 모드: base64 RGB 데이터를 디코딩해 <span> 태그로 출력
-  const bytes = Uint8Array.from(atob(colors), c => c.charCodeAt(0));
-  const rows  = [];
-  let pi = 0;
-  for (const line of lines) {
-    const parts = [];
-    for (const ch of line) {
-      const r = bytes[pi], g = bytes[pi+1], b = bytes[pi+2];
-      pi += 3;
-      const safe = ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : ch === '&' ? '&amp;' : ch === ' ' ? '&nbsp;' : ch;
-      parts.push(`<span style="color:rgb(${r},${g},${b})">${safe}</span>`);
-    }
-    rows.push(parts.join(''));
+  // 녹화 중이면 캔버스에도 그리기
+  if (recorder && recorder.state === 'recording') {
+    _drawToRecCanvas(lines, bytes);
   }
-  output.innerHTML = rows.join('\n');
+}
+
+function _drawToRecCanvas(lines, colorBytes) {
+  const sz   = +document.getElementById('c-size').value;
+  const cw   = sz * 0.601;  // 모노스페이스 문자 너비 근사값
+  const ch   = sz * 1.15;
+  const cols = lines[0]?.length || 0;
+  const rows = lines.length;
+
+  if (!recReady) {
+    recCanvas.width  = Math.ceil(cols * cw);
+    recCanvas.height = Math.ceil(rows * ch);
+    recReady = true;
+  }
+
+  recCtx.fillStyle = '#000';
+  recCtx.fillRect(0, 0, recCanvas.width, recCanvas.height);
+  recCtx.font = `${sz}px 'Courier New', monospace`;
+
+  if (!colorBytes) {
+    recCtx.fillStyle = '#fff';
+    lines.forEach((line, r) => recCtx.fillText(line, 0, (r + 1) * ch - 2));
+  } else {
+    let pi = 0;
+    lines.forEach((line, r) => {
+      [...line].forEach((c_ch, c) => {
+        const R = colorBytes[pi], G = colorBytes[pi+1], B = colorBytes[pi+2];
+        pi += 3;
+        recCtx.fillStyle = `rgb(${R},${G},${B})`;
+        recCtx.fillText(c_ch, c * cw, (r + 1) * ch - 2);
+      });
+    });
+  }
+}
+
+function toggleRecord() {
+  if (!recorder) _startRecord(); else _stopRecord();
+}
+
+function _startRecord() {
+  recReady = false;
+  recChunks = [];
+  const mime = ['video/webm;codecs=vp9', 'video/webm'].find(m => MediaRecorder.isTypeSupported(m));
+  const stream = recCanvas.captureStream(15);
+  recorder = new MediaRecorder(stream, { mimeType: mime });
+  recorder.ondataavailable = e => { if (e.data.size > 0) recChunks.push(e.data); };
+  recorder.onstop = () => {
+    const blob = new Blob(recChunks, { type: 'video/webm' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'ascii.webm';
+    a.click();
+    recChunks = [];
+    recorder = null;
+    const btn = document.getElementById('btn-record');
+    btn.textContent = '🔴 녹화';
+    btn.style.cssText = '';
+  };
+  recorder.start(100);
+  const btn = document.getElementById('btn-record');
+  btn.textContent = '⏹ 녹화 중지';
+  btn.style.background = '#5a1a1a';
+  btn.style.color = '#f88';
+  statusEl.textContent = '녹화 중';
+}
+
+function _stopRecord() {
+  if (recorder?.state !== 'inactive') recorder.stop();
 }
 
 // ── 파일 저장 ────────────────────────────────────────
